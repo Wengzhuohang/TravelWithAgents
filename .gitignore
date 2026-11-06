@@ -1,1 +1,13 @@
+# secrets
 .env
+
+# generated data and results (not tracked)
+data/
+eval/
+
+# Python / Jupyter
+__pycache__/
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
