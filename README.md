@@ -19,13 +19,11 @@ Everything lives in one notebook: [`TravelWithAgents.ipynb`](TravelWithAgents.ip
 | 5 | Validator + Feasibility agent | code + LLM with tools, up to 3 repair rounds | a plan with no hard violations |
 | 6 | Baseline | one LLM prompt | the same task in a single call, for comparison |
 | 7 | Evaluator | code metrics + pairwise LLM judge + evaluator agent | scores for both plans |
+| 8 | Re-plan | code (cached persona outputs) | a new plan for different weights, with no new LLM calls |
 
 An LLM never runs code itself. When it wants a tool, it returns a structured request, and the harness
 (the "LLM harness" cell) runs the Python function, sends the result back, enforces a step budget and logs every
 call.
-
-Notebook cells are tagged **[A]** (data & routing), **[B]** (agents & evaluation) or **[A+B]** (shared
-contracts: change them together).
 
 ## Models
 
@@ -109,7 +107,7 @@ RUN_BATCH = True                   # set False to skip: each case makes many LLM
 
 - Each finished case is saved to `eval/results/<id>__t0.7__r0.json`. Cases that already have a file are skipped,
   so the batch is **resumable**: if you hit Groq's daily limit, run it again later.
-- Split the ids between teammates, each with their own Groq key, to stay inside the free tier.
+- Run a few ids at a time (`ONLY_IDS`) to stay inside Groq's free tier.
 - To redo a case, delete its result file.
 - Ids must match exactly. A typo is skipped without any warning.
 
@@ -141,8 +139,8 @@ Each test case is scored three ways, from most to least trustworthy:
 ### Read the results with these in mind
 
 - **Two metrics favour the multi-agent plan by construction.** Code writes its times and orders its stops with the
-  same shortest-path solver the metric uses. So 0 violations and a 1.00 backtracking ratio show the code works,
-  not that multiple agents plan better. Say so in the report.
+  same travel matrix the metrics use. So low violations and backtracking show the code works, not that multiple
+  agents plan better. Backtracking is not exactly 1.00, because meals are inserted after the route is ordered.
 - **Check whether persona ratings are saturated.** If the persona agents rate almost every place 5/5, the
   personas barely steer which places get picked. The weight sweep shows whether the weights still work.
 - **Position bias shows up as `inconsistent`.** Count those verdicts separately; they are not wins for either side.
@@ -164,14 +162,14 @@ eval/
   blind/                    blind human read: make_plans.py, plans.md, key.json
 ```
 
-Commit `data/` and `eval/` so your teammate can run without a Maps key and doesn't redo finished cases. Both are
-in `.gitignore`, so add new files with `git add -f`.
+`data/` and `eval/` are in `.gitignore`. Commit them with `git add -f` when you want the cached places, travel
+times and finished cases kept with the code, so the notebook can be re-run without a Maps key or repeating
+finished cases.
 
 ### Adding a city
 
 With a Maps key, a request for a city that isn't cached is ingested automatically. You can also run
-`ingest_city("City", "Country")` yourself (the "Ingest your evaluation cities" cell has the five cities commented
-out). Ingestion searches inside Google's own boundary for the city: 1 boundary call + 9 searches per city. Commit
+`ingest_city("City", "Country")` yourself. Ingestion searches inside Google's own boundary for the city: 1 boundary call + 9 searches per city. Commit
 the new CSV. Cached cities are skipped unless you pass `force=True`. Routing has a hard cap of 2,500 Routes API elements per session
 (`ROUTES_ELEMENT_BUDGET`), to stay inside Google's free allowance.
 
@@ -183,6 +181,6 @@ the new CSV. Cached cities are skipped unless you pass `force=True`. Routing has
 | `RuntimeError: No API key for provider 'groq'` | key not found | add `GROQ_API_KEY` to `.env` |
 | `TripRequestIncomplete: Please make the request more specific` | request has no city or trip length | add what the message asks for |
 | `⚠️ Gemini model '...' is not available` | that model is retired or not on your key | not an error; it tries the next one |
-| `GOOGLE_MAPS_API_KEY is needed to ingest a new city` | new city, no Maps key | ask whoever has the key to ingest it, or use a cached city |
+| `GOOGLE_MAPS_API_KEY is needed to ingest a new city` | new city, no Maps key | add a Maps key, or use a cached city |
 | `⏳ pacing ... waiting Ns` | staying under Groq's tokens-per-minute limit | not an error; just wait |
 | `pip DEPRECATION: Loading egg ...` | an old package in your Python install | harmless warning, ignore it |
