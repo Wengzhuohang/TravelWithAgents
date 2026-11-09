@@ -13,7 +13,7 @@ Everything lives in one notebook: [`TravelWithAgents.ipynb`](TravelWithAgents.ip
 | A | Ingestion | code + Google Places API, run once per city | `data/places/places_<city>.csv` |
 | 0 | Parser agent | LLM | structured trip request (dates, budget, pace, must-include/avoid) |
 | 1 | Scout agent | LLM + tools | a pool of ~25–35 candidate places |
-| 2 | Persona agents: Adventurer, Foodie, Culture buff, Budget-keeper | 4 × LLM | each persona's ratings and draft timetable |
+| 2 | Persona agents: Adventurer, Foodie, Culture buff | 3 × LLM | each persona's ratings and draft timetable |
 | 3 | Selector | code | final places, split between personas by **weights that sum to 1** |
 | 4 | Route optimiser | code + Google Routes API | places grouped into days by area, shortest order per day, timed schedule |
 | 5 | Validator + Feasibility agent | code + LLM with tools, up to 3 repair rounds | a plan with no hard violations |
@@ -35,11 +35,13 @@ All models are called over the API, so a plain CPU runtime is enough.
 |:--|:--|:--|
 | `strong`: feasibility agent and baseline | `openai/gpt-oss-120b` | Groq |
 | `small`: parser, scout, personas | `openai/gpt-oss-20b` | Groq |
-| `judge`: pairwise judge and evaluator agent | `qwen/qwen3.8-27b` | Groq |
+| `judge`: pairwise judge and evaluator agent | `gemini-3.5-flash` (needs `GEMINI_API_KEY`) | Gemini |
 
 The baseline and the feasibility agent share the same model, so the multi-agent system never gets a bigger model
 than the baseline. The judge comes from a different model family than the planners, to avoid self-preference
-bias. Models are set in the `MODELS` dict in the configuration cell.
+bias. If that Gemini model isn't available on your key, the harness tries the next one in `GEMINI_CANDIDATES`.
+Without a Gemini key (or if no candidate works), the judge falls back to `openai/gpt-oss-20b` on Groq: the same
+family as the planners, so say so in the report. Models are set in the `MODELS` dict in the configuration cell.
 
 ## Setup
 
@@ -49,13 +51,11 @@ bias. Models are set in the `MODELS` dict in the configuration cell.
 |:--|:--|:--|
 | `GROQ_API_KEY` | every LLM call | **yes** |
 | `GOOGLE_MAPS_API_KEY` | ingesting new cities (Places API) and real travel times (Routes API) | no |
-| `GEMINI_API_KEY` | not used by default (the judge runs on Groq) | no |
+| `GEMINI_API_KEY` | the judge and evaluator agent (a different model family from the planners) | no, but recommended |
 
-The notebook looks for each key in this order: environment variable → Colab Secrets → `.env` file in the repo
-root. If `GROQ_API_KEY` is missing everywhere, it asks you to type it in.
-
-- **Local:** fill in [`.env`](.env) (`KEY=value`, one per line). It is gitignored, so it is never committed.
-- **Colab:** add the keys under Secrets (🔑 icon in the left sidebar) and turn on notebook access.
+Put the keys in a `.env` file (`KEY=value`, one per line) next to the notebook or one folder up. It is
+gitignored, so it is never committed. Keys already set as environment variables also work. If `GROQ_API_KEY` is
+missing, the notebook asks you to type it in.
 
 Never paste a key into a notebook cell: outputs get committed.
 
@@ -68,19 +68,25 @@ travel times from straight-line distance for any pair not already in `data/cache
 The first code cell installs them:
 
 ```
-%pip install -q "openai>=1.58,<2" pandas requests scikit-learn
+%pip install -q "openai>=1.40" pandas requests scikit-learn
 ```
 
-Restart the kernel after it installs or upgrades anything. The `openai` pin matters:
-
-- **1.58 or newer**, because the harness sends `reasoning_effort` for the `gpt-oss` models.
-- **Below 2**, because 3.x switches to `httpx2`, which crashes with older Brotli installs (common in Anaconda)
-  with `TypeError: process() takes no keyword arguments`.
+Restart the kernel after it installs or upgrades anything. The harness sends `reasoning_effort` for the `gpt-oss`
+models, so an old `openai` package will fail (see Troubleshooting). It also asks for gzip instead of Brotli, which
+avoids a crash with older Brotli installs (common in Anaconda).
 
 ### 3. Run
 
 Open the notebook and run the cells from the top. Steps 0–8 walk through one sample request (Hanoi) so you can
-see each agent's output.
+see each agent's output. Edit `TRIP_TEXT` (Step 0) and `WEIGHTS` (the cell after it) to try your own.
+
+- **The request must name the city and the trip length** ("3 days", "one day", or a start *and* end date).
+  Vague requests like "a weekend in Hanoi" are rejected with a message saying what to add. Add `"start_date"` or
+  `"budget_usd"` to `REQUIRED_TRIP_FIELDS` to make it stricter.
+- Anything else not stated gets a default: start date 2 weeks from today, 09:00–20:00, normal pace, a budget of
+  40 USD × days.
+- **Weights must sum to 1** (they are re-normalised with a warning if they don't). They decide how much each
+  persona counts when places are selected.
 
 ## Running the experiments
 
@@ -98,7 +104,7 @@ In the batch cell, set:
 
 ```python
 ONLY_IDS = ["hcm-01", "hcm-02"]   # None runs all 12
-RUN_BATCH = True                   # off by default: each case makes many LLM calls
+RUN_BATCH = True                   # set False to skip: each case makes many LLM calls
 ```
 
 - Each finished case is saved to `eval/results/<id>__t0.7__r0.json`. Cases that already have a file are skipped,
@@ -110,6 +116,14 @@ RUN_BATCH = True                   # off by default: each case makes many LLM ca
 The cells after the batch build the report material: a results summary, a weight sweep, a temperature experiment,
 a "judge the judge" check against human labels, and a cost breakdown (LLM calls, tokens, seconds per agent).
 
+### Human labels for "judge the judge"
+
+1. Run `python3 eval/blind/make_plans.py` from the repo root. It writes every finished case to
+   `eval/blind/plans.md` as plan A and plan B, and keeps which is which in `eval/blind/key.json`.
+2. Read each case and fill in its `Your pick:` line with `A`, `B` or `tie`.
+3. Run the "Judge the judge" cell. It unblinds the picks with `key.json` and reports how often the LLM judge
+   agrees with you.
+
 ## Evaluation
 
 Each test case is scored three ways, from most to least trustworthy:
@@ -118,8 +132,8 @@ Each test case is scored three ways, from most to least trustworthy:
    ratio (actual travel ÷ shortest order of the same stops; 1.00 is ideal) and persona alignment (how closely
    visiting time per persona matches the weights).
 2. **Pairwise LLM judge**: compares the two plans twice, once in each order. A verdict only counts if both orders
-   agree; otherwise it is marked `inconsistent` (this catches position bias). The judge sees the code-computed
-   travel time between stops, so it can spot plans that can't be done in time.
+   agree; otherwise it is marked `inconsistent` (this catches position bias). The judge sees each stop's times,
+   name, category and estimated cost.
 3. **Evaluator agent**: an LLM with a `get_metrics` tool that writes a scored report. Plans are labelled A/B in a
    random but repeatable order, so it doesn't know which one is the baseline. Off by default in batch runs
    (`with_agent_report=False`).
@@ -129,13 +143,12 @@ Each test case is scored three ways, from most to least trustworthy:
 - **Two metrics favour the multi-agent plan by construction.** Code writes its times and orders its stops with the
   same shortest-path solver the metric uses. So 0 violations and a 1.00 backtracking ratio show the code works,
   not that multiple agents plan better. Say so in the report.
-- **Persona ratings are saturated.** The persona agents rate almost every place 5/5, so the personas barely steer
-  which places get picked. When scores tie, the budget trim drops the most expensive place first.
-- **The Qwen judge favours whichever plan is shown first.** The two-order check marks those verdicts
-  `inconsistent`, so expect many of them.
+- **Check whether persona ratings are saturated.** If the persona agents rate almost every place 5/5, the
+  personas barely steer which places get picked. The weight sweep shows whether the weights still work.
+- **Position bias shows up as `inconsistent`.** Count those verdicts separately; they are not wins for either side.
 - **The places data has chain duplicates**, e.g. three branches of the same restaurant, which the selector can
   pick together.
-- Three Hanoi cases are not enough to call a winner.
+- 12 cases across 5 cities is a small sample: report it as such.
 
 ## Repository layout
 
@@ -148,24 +161,28 @@ data/
   cache/persona_cache.json  cached persona agent outputs (saves LLM calls on re-runs)
 eval/
   results/                  one JSON file per finished test case
+  blind/                    blind human read: make_plans.py, plans.md, key.json
 ```
 
-Commit `data/` and `eval/results/` so your teammate can run without a Maps key and doesn't redo finished cases.
+Commit `data/` and `eval/` so your teammate can run without a Maps key and doesn't redo finished cases. Both are
+in `.gitignore`, so add new files with `git add -f`.
 
 ### Adding a city
 
-Whoever has the Maps key runs `ingest_city("City", "Country")` once (the "Ingest your evaluation cities" cell
-does this for all five cities when `GOOGLE_MAPS_API_KEY` is set) and commits the new CSV. Cities that are already
-cached are skipped. Routing has a hard cap of 2,500 Routes API elements per session
+With a Maps key, a request for a city that isn't cached is ingested automatically. You can also run
+`ingest_city("City", "Country")` yourself (the "Ingest your evaluation cities" cell has the five cities commented
+out). Ingestion searches inside Google's own boundary for the city: 1 boundary call + 9 searches per city. Commit
+the new CSV. Cached cities are skipped unless you pass `force=True`. Routing has a hard cap of 2,500 Routes API elements per session
 (`ROUTES_ELEMENT_BUDGET`), to stay inside Google's free allowance.
 
 ## Troubleshooting
 
 | Error | Cause | Fix |
 |:--|:--|:--|
-| `unexpected keyword argument 'reasoning_effort'` | `openai` older than 1.58 | rerun the install cell, then restart the kernel |
-| `process() takes no keyword arguments` | `openai` 3.x with old Brotli | keep the `<2` pin, rerun the install cell, restart |
-| `RuntimeError: No API key for provider 'groq'` | key not found | add `GROQ_API_KEY` to `.env` or Colab Secrets |
+| `unexpected keyword argument 'reasoning_effort'` | old `openai` package | `%pip install -U openai`, then restart the kernel |
+| `RuntimeError: No API key for provider 'groq'` | key not found | add `GROQ_API_KEY` to `.env` |
+| `TripRequestIncomplete: Please make the request more specific` | request has no city or trip length | add what the message asks for |
+| `⚠️ Gemini model '...' is not available` | that model is retired or not on your key | not an error; it tries the next one |
 | `GOOGLE_MAPS_API_KEY is needed to ingest a new city` | new city, no Maps key | ask whoever has the key to ingest it, or use a cached city |
 | `⏳ pacing ... waiting Ns` | staying under Groq's tokens-per-minute limit | not an error; just wait |
 | `pip DEPRECATION: Loading egg ...` | an old package in your Python install | harmless warning, ignore it |
