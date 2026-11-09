@@ -1,9 +1,8 @@
 # secrets
 .env
 
-# generated data and results (not tracked)
+# generated data (not tracked)
 data/
-eval/
 
 # Python / Jupyter
 __pycache__/

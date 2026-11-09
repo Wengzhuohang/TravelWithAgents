@@ -51,7 +51,7 @@ family as the planners, so say so in the report. Models are set in the `MODELS` 
 | `GOOGLE_MAPS_API_KEY` | ingesting new cities (Places API) and real travel times (Routes API) | no |
 | `GEMINI_API_KEY` | the judge and evaluator agent (a different model family from the planners) | no, but recommended |
 
-Put the keys in a `.env` file (`KEY=value`, one per line) next to the notebook or one folder up. It is
+Copy `.env.example` to `.env` and fill in the keys (`KEY=value`, one per line). The `.env` file goes next to the notebook or one folder up. It is
 gitignored, so it is never committed. Keys already set as environment variables also work. If `GROQ_API_KEY` is
 missing, the notebook asks you to type it in.
 
@@ -66,7 +66,7 @@ travel times from straight-line distance for any pair not already in `data/cache
 The first code cell installs them:
 
 ```
-%pip install -q "openai>=1.40" pandas requests scikit-learn
+%pip install -q "openai>=1.40" pandas requests scikit-learn matplotlib
 ```
 
 Restart the kernel after it installs or upgrades anything. The harness sends `reasoning_effort` for the `gpt-oss`
@@ -85,6 +85,69 @@ see each agent's output. Edit `TRIP_TEXT` (Step 0) and `WEIGHTS` (the cell after
   40 USD × days.
 - **Weights must sum to 1** (they are re-normalised with a warning if they don't). They decide how much each
   persona counts when places are selected.
+
+## Run the tests yourself
+
+These steps take you from a fresh clone to your own run of the 12-case test set, using your own API keys.
+
+**1. Clone the repo and add your keys.**
+
+```bash
+git clone https://github.com/Wengzhuohang/TravelWithAgents.git
+cd TravelWithAgents
+cp .env.example .env      # then open .env and paste in your keys
+```
+
+You need `GROQ_API_KEY` (free at https://console.groq.com/keys). `GEMINI_API_KEY` is recommended, so the judge comes
+from a different model family. `GOOGLE_MAPS_API_KEY` is optional (see step 2).
+
+**2. Check that the city data is there.**
+
+```bash
+ls data/places
+```
+
+All 12 cases need 5 files: `places_bangkok.csv`, `places_da_nang.csv`, `places_hanoi.csv`,
+`places_ho_chi_minh_city.csv` and `places_hoi_an.csv`. If one is missing, you have two choices:
+
+- add a `GOOGLE_MAPS_API_KEY`, and the notebook fetches that city automatically (about 10 Places API calls per city,
+  inside Google's free monthly allowance), or
+- leave that city's cases out of `ONLY_IDS` in step 4.
+
+**3. Move the existing results aside.** The batch skips any case that already has a result file, so it would
+just reuse ours. Move them out of the way first:
+
+```bash
+mv eval/results eval/results_original
+mv eval/blind/plans.md eval/blind/plans_original.md
+mv eval/blind/key.json eval/blind/key_original.json
+rm -f data/cache/persona_cache.json   # optional: forces fresh persona calls instead of reusing ours
+```
+
+Keep `data/cache/routes.json`. It only holds travel times between places, and keeping it saves Maps calls.
+
+**4. Run the notebook.**
+
+1. Open `TravelWithAgents.ipynb` in Jupyter or VS Code.
+2. Run the first code cell (package install), then restart the kernel.
+3. Check the batch cell in the Experiments section: `RUN_BATCH = True`, and `ONLY_IDS` lists the cases you want.
+   Set `RUN_TEMP_EXPERIMENT = False` if you want to skip the temperature experiment (18 extra LLM calls).
+4. Use **Run All**.
+
+The notebook first walks through the Hanoi demo (Steps 0–8), then runs the batch. Each case takes about 2–5
+minutes and 15–35k tokens. All 12 take roughly 35 minutes and about 270k tokens. If Groq's free-tier limit runs
+out partway, the remaining cases print `FAILED`. Run the batch cell again later: finished cases are skipped, so
+it carries on where it stopped.
+
+**5. Read the results.** The "Results summary" cell compares the multi-agent plans with the baseline
+(violations, feasibility, backtracking, persona alignment, judge verdicts). The last cell shows the cost per
+agent. Our original results are in `eval/results_original/` if you want to compare.
+
+**6. Add your own human labels (optional).** On its first run, the cell above "Judge the judge" writes
+`eval/blind/plans.md`: every finished case as plan A and plan B, with no hint of which is which. Fill in each
+case's `Your pick:` line with `A`, `B` or `tie`, then re-run the "Judge the judge" cells to see how often the
+LLM judge agrees with you. The sheet is only built when `plans.md` doesn't exist yet, so your picks are never
+overwritten.
 
 ## Running the experiments
 
@@ -116,8 +179,10 @@ a "judge the judge" check against human labels, and a cost breakdown (LLM calls,
 
 ### Human labels for "judge the judge"
 
-1. Run `python3 eval/blind/make_plans.py` from the repo root. It writes every finished case to
-   `eval/blind/plans.md` as plan A and plan B, and keeps which is which in `eval/blind/key.json`.
+1. The notebook writes every finished case to `eval/blind/plans.md` as plan A and plan B the first time it runs
+   the cell above "Judge the judge" (only if `plans.md` doesn't exist yet). It keeps which is which in
+   `eval/blind/key.json`. `python3 eval/blind/make_plans.py` rebuilds the sheet for new cases, but it also
+   blanks every pick already filled in.
 2. Read each case and fill in its `Your pick:` line with `A`, `B` or `tie`.
 3. Run the "Judge the judge" cell. It unblinds the picks with `key.json` and reports how often the LLM judge
    agrees with you.
@@ -162,9 +227,29 @@ eval/
   blind/                    blind human read: make_plans.py, plans.md, key.json
 ```
 
-`data/` and `eval/` are in `.gitignore`. Commit them with `git add -f` when you want the cached places, travel
-times and finished cases kept with the code, so the notebook can be re-run without a Maps key or repeating
-finished cases.
+`eval/` is committed, so a fresh clone has the finished cases and the human labels. `data/` is in `.gitignore`.
+Commit it with `git add -f` when you want the cached places and travel times kept with the code, so the notebook
+can be re-run without a Maps key.
+
+### The `eval/blind/` folder
+
+This folder checks the LLM judge against people. The judge decides which plan is better, multi-agent or
+baseline. To know whether its verdicts mean anything, we read the same pairs of plans ourselves and compared our
+picks with the judge's. The read is **blind**: each plan is shown only as "Plan A" or "Plan B", with no meal labels
+or other hints about which system wrote it, so our own expectations can't sway the pick.
+
+| File | What it is |
+|:--|:--|
+| `plans.md` | the review sheet: for each test case, the trip request, then Plan A and Plan B (times and place names only), then a `Your pick:` line (`A`, `B` or `tie`) and a `Notes:` line explaining the pick |
+| `key.json` | the answer key: for each case, which system is A and which is B (assigned at random). Don't open it until all the picks are filled in |
+| `make_plans.py` | rebuilds `plans.md` from `eval/results/`, keeping the A/B assignment in `key.json`. It blanks every pick, so only use it before you start reviewing |
+
+The "Judge the judge" cell reads the picks, unblinds them with `key.json`, and reports how often the judge agrees
+with the human reader and how many judge verdicts flipped when the plan order was swapped (position bias). If
+`plans.md` doesn't exist, the cell above it builds a blank sheet from the current results.
+
+The committed `plans.md` holds our picks and notes for all 12 cases. To do your own blind read, move it and
+`key.json` aside first (see [Run the tests yourself](#run-the-tests-yourself), step 3).
 
 ### Adding a city
 

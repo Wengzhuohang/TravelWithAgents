@@ -1,0 +1,50 @@
+{
+ "bkk-01": {
+  "A": "baseline",
+  "B": "multi_agent"
+ },
+ "bkk-02": {
+  "A": "multi_agent",
+  "B": "baseline"
+ },
+ "bkk-03": {
+  "A": "multi_agent",
+  "B": "baseline"
+ },
+ "dn-01": {
+  "A": "baseline",
+  "B": "multi_agent"
+ },
+ "dn-02": {
+  "A": "multi_agent",
+  "B": "baseline"
+ },
+ "ha-01": {
+  "A": "multi_agent",
+  "B": "baseline"
+ },
+ "ha-02": {
+  "A": "multi_agent",
+  "B": "baseline"
+ },
+ "han-01": {
+  "A": "multi_agent",
+  "B": "baseline"
+ },
+ "han-02": {
+  "A": "baseline",
+  "B": "multi_agent"
+ },
+ "han-03": {
+  "A": "baseline",
+  "B": "multi_agent"
+ },
+ "hcm-01": {
+  "A": "baseline",
+  "B": "multi_agent"
+ },
+ "hcm-02": {
+  "A": "baseline",
+  "B": "multi_agent"
+ }
+}
